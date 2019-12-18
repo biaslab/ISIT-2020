@@ -7,8 +7,8 @@ using ProgressMeter
 using ForneyLab
 using Random
 using LinearAlgebra
-include( "../ARnode/ARNode.jl")
-using .ARNode
+include("../module/autoregressive.jl")
+using .AR
 import ForneyLab: unsafeCov, unsafeMean, unsafePrecision
 
 export buildGraphAR, inferAR
@@ -23,7 +23,7 @@ function buildGraphAR(ARorder)
                                          placeholder(:w_x_t_prev, dims=(ARorder, ARorder)))
 
     @RV γ ~ Gamma(placeholder(:a_w_t), placeholder(:b_w_t))
-    @RV x_t ~ Autoregression(θ, x_t_prev, γ)
+    @RV x_t ~ Autoregressive(θ, x_t_prev, γ)
     c = zeros(ARorder); c[1] = 1;
     @RV y_t ~ GaussianMeanPrecision(dot(c, x_t), placeholder(:w_y_t))
 
@@ -90,33 +90,34 @@ function inferAR(r_factorization, observations, obs_noise_var; vmp_iter=5, prior
         marginals[:x_t_prev] = ProbabilityDistribution(Multivariate, GaussianMeanPrecision, m=m_x_t_prev_min, w=w_x_t_prev_min)
         marginals[:γ] = ProbabilityDistribution(Univariate, Gamma, a=a_w_t_min, b=b_w_t_min)
         if @isdefined(F); f = Vector{Float64}(undef, vmp_iter) end
+        data = Dict(:y_t => observations[t],
+                    :w_y_t => obs_noise_var^-1,
+                    :m_θ_t => m_θ_t_min,
+                    :w_θ_t => w_θ_t_min,
+                    :m_x_t_prev => m_x_t_prev_min,
+                    :w_x_t_prev => w_x_t_prev_min,
+                    :a_w_t => a_w_t_min,
+                    :b_w_t => b_w_t_min)
         for i = 1:vmp_iter
-            data = Dict(:y_t => observations[t],
-                        :w_y_t => obs_noise_var^-1,
-                        :m_θ_t => m_θ_t_min,
-                        :w_θ_t => w_θ_t_min,
-                        :m_x_t_prev => m_x_t_prev_min,
-                        :w_x_t_prev => w_x_t_prev_min,
-                        :a_w_t => a_w_t_min,
-                        :b_w_t => b_w_t_min)
             Base.invokelatest(stepX_t!, data, marginals)
             Base.invokelatest(stepΘ!, data, marginals)
             Base.invokelatest(stepΓ!, data, marginals)
             Base.invokelatest(stepX_t_prev!, data, marginals)
-            m_θ[t] = unsafeMean(marginals[:θ])
-            w_θ[t] = unsafePrecision(marginals[:θ])
-            m_x_prev[t] = unsafeMean(marginals[:x_t])
-            w_x_prev[t] = unsafePrecision(marginals[:x_t])
-            a_w[t] = marginals[:γ].params[:a]
-            b_w[t] = marginals[:γ].params[:b]
-            m_θ_t_min = m_θ[t]
-            w_θ_t_min = w_θ[t]
-            m_x_t_prev_min = m_x_prev[t]
-            w_x_t_prev_min = w_x_prev[t]
-            a_w_t_min = a_w[t]
-            b_w_t_min = b_w[t]
             if @isdefined(F); f[i] = Base.invokelatest(freeEnergy, data, marginals) end
         end
+        m_θ[t] = unsafeMean(marginals[:θ])
+        w_θ[t] = unsafePrecision(marginals[:θ])
+        m_x_prev[t] = unsafeMean(marginals[:x_t])
+        w_x_prev[t] = unsafePrecision(marginals[:x_t])
+        a_w[t] = marginals[:γ].params[:a]
+        b_w[t] = marginals[:γ].params[:b]
+        m_θ_t_min = m_θ[t]
+        w_θ_t_min = w_θ[t]
+        m_x_t_prev_min = m_x_prev[t]
+        w_x_t_prev_min = w_x_prev[t]
+        a_w_t_min = a_w[t]
+        b_w_t_min = b_w[t]
+
         if @isdefined(F)
             F_iter[t] = f
             F[t] = F_iter[t][end]
